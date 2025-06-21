@@ -1,7 +1,7 @@
 <?php
-require_once __DIR__ . '/../config/cors.php'; // ✅ must be first
 header('Content-Type: application/json');
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/cors.php';
 
 // Handle CORS preflight request
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -10,11 +10,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 try {
-    // Correct variable names from config/db.php
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $username, $password);
+    // ✅ FIX: Use correct variable names from db.php config
+    $pdo = new PDO("mysql:host=$db_host;dbname=$db_name;charset=utf8", $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
     $method = $_SERVER['REQUEST_METHOD'];
+    
+    // ✅ FIX: Get ID from $_GET (set by route.php) instead of parsing URL
     $id = isset($_GET['id']) ? (int) $_GET['id'] : null;
 
     switch ($method) {
@@ -42,9 +44,25 @@ try {
         case 'POST':
             $input = json_decode(file_get_contents('php://input'), true);
 
+            // Check if JSON decode was successful
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Invalid JSON input']);
+                break;
+            }
+
             if (!isset($input['name']) || empty(trim($input['name']))) {
                 http_response_code(400);
                 echo json_encode(['error' => 'Category name is required']);
+                break;
+            }
+
+            // Check if category name already exists
+            $stmt = $pdo->prepare("SELECT id FROM category WHERE name = :name");
+            $stmt->execute([':name' => trim($input['name'])]);
+            if ($stmt->fetch()) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Category name already exists']);
                 break;
             }
 
@@ -54,13 +72,19 @@ try {
                 ':description' => $input['description'] ?? null
             ]);
 
-            echo json_encode([
-                'id' => $pdo->lastInsertId(),
-                'message' => 'Category created successfully'
-            ]);
+            $newId = $pdo->lastInsertId();
+            
+            // Return the created category
+            $stmt = $pdo->prepare("SELECT * FROM category WHERE id = :id");
+            $stmt->execute([':id' => $newId]);
+            $newCategory = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            http_response_code(201);
+            echo json_encode($newCategory);
             break;
 
         case 'PUT':
+        case 'PATCH':
             if (!$id) {
                 http_response_code(400);
                 echo json_encode(['error' => 'Category ID required']);
@@ -69,9 +93,33 @@ try {
 
             $input = json_decode(file_get_contents('php://input'), true);
 
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Invalid JSON input']);
+                break;
+            }
+
             if (!isset($input['name']) || empty(trim($input['name']))) {
                 http_response_code(400);
                 echo json_encode(['error' => 'Category name is required']);
+                break;
+            }
+
+            // Check if category exists
+            $stmt = $pdo->prepare("SELECT id FROM category WHERE id = :id");
+            $stmt->execute([':id' => $id]);
+            if (!$stmt->fetch()) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Category not found']);
+                break;
+            }
+
+            // Check if new name conflicts with existing category (exclude current one)
+            $stmt = $pdo->prepare("SELECT id FROM category WHERE name = :name AND id != :id");
+            $stmt->execute([':name' => trim($input['name']), ':id' => $id]);
+            if ($stmt->fetch()) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Category name already exists']);
                 break;
             }
 
@@ -82,13 +130,27 @@ try {
                 ':id' => $id
             ]);
 
-            echo json_encode(['message' => 'Category updated successfully']);
+            // Return updated category
+            $stmt = $pdo->prepare("SELECT * FROM category WHERE id = :id");
+            $stmt->execute([':id' => $id]);
+            $updatedCategory = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            echo json_encode($updatedCategory);
             break;
 
         case 'DELETE':
             if (!$id) {
                 http_response_code(400);
                 echo json_encode(['error' => 'Category ID required']);
+                break;
+            }
+
+            // Check if category exists
+            $stmt = $pdo->prepare("SELECT id FROM category WHERE id = :id");
+            $stmt->execute([':id' => $id]);
+            if (!$stmt->fetch()) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Category not found']);
                 break;
             }
 
